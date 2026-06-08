@@ -1,0 +1,168 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: voicing-llm-backendconfig
+spec:
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 60
+  cdn:
+    enabled: true
+    cachePolicy:
+      includeHost: true
+      includeProtocol: true
+      includeQueryString: true
+  healthCheck:
+    type: HTTP
+    requestPath: /health
+    port: 8000
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: llm-voicing-cert
+spec:
+  domains:
+    - llm-dev.nonprod.voicing.ai
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicing-llm
+  labels:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+  annotations:
+    iam.gke.io/gcp-service-account: kubernetes-pods@voicing-non-production.iam.gserviceaccount.com
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicing-llm
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "voicing-llm-backendconfig"}'
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicing-llm
+  labels:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voicing-llm
+      app.kubernetes.io/instance: voicing-llm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voicing-llm
+        app.kubernetes.io/instance: voicing-llm
+    spec:
+      serviceAccountName: voicing-llm
+      containers:
+        - name: voicing-llm
+          image: "lmcache/vllm-openai:latest"
+          command: ["/bin/sh","-c"]
+          args:
+            - >
+              vllm serve voicing-ai/voicing-qwen3-30b-a3b-V2
+              --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+              --served-model-name voicing-llm-v1.5
+              --enable-auto-tool-choice
+              --tool-call-parser hermes
+              --load-format auto
+              --dtype bfloat16
+              --gpu-memory-utilization 0.9
+              --max-num-batched-tokens 1024
+              --max-num-seq 1024
+              --max-model-len 65536
+              --tensor_parallel_size 1
+              --host 0.0.0.0
+              --port 8000
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: VLLM_USE_V1
+              value: "0"
+            - name: LMCACHE_USE_EXPERIMENTAL
+              value: "True"
+            - name: LMCACHE_BACKEND
+              value: "redis"
+            - name: LMCACHE_REMOTE_URL
+              value: "redis://10.90.1.3:6379"
+            - name: LMCACHE_REDIS_HOST
+              value: "10.90.1.3"
+            - name: LMCACHE_REDIS_PORT
+              value: "6379"
+            - name: LMCACHE_MODEL_NAME
+              value: "voicing-llm-v1.5"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token  
+                  key: HUGGING_FACE_HUB_TOKEN            
+          imagePullPolicy: Always
+          stdin: true
+          tty: true
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            limits:
+              cpu: "10"
+              memory: 60Gi
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "10"
+              memory: 60Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - mountPath: /root/.cache/huggingface
+              name: model-cache
+      volumes:
+        - emptyDir: {}
+          name: model-cache
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-a100-80gb
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: voicing-llm
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: llm-voicing-cert
+    kubernetes.io/ingress.global-static-ip-name: llm-voicing-ip
+    kubernetes.io/ingress.allow-http: "true"
+spec:
+  ingressClassName: gce
+  rules:
+    - host: llm-dev.nonprod.voicing.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: voicing-llm
+                port:
+                  number: 80

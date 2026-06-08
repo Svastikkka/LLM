@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hf-token
+  namespace: dev
+type: Opaque
+stringData:
+  HF_TOKEN: "aGZfb2xDSk5wbnl5UUh6dlJibnNsbkprSlNPakJZQmtxWFZWUQ=="
+  HUGGING_FACE_HUB_TOKEN: "aGZfb2xDSk5wbnl5UUh6dlJibnNsbkprSlNPakJZQmtxWFZWUQ=="

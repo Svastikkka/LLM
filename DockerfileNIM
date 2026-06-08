@@ -1,0 +1,15 @@
+# Start from NVIDIA CUDA devel image (includes compilers + nvidia-smi)
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04 AS cuda-base
+
+# Now start from the official NIM LLM image
+FROM nvcr.io/nim/nvidia/llm-nim:latest
+
+# Copy over NVIDIA tools and libraries from CUDA base
+COPY --from=cuda-base /usr/local/nvidia/bin/nvidia-smi /usr/local/nvidia/bin/nvidia-smi
+COPY --from=cuda-base /usr/lib/x86_64-linux-gnu/libnvidia-ml.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=cuda-base /usr/lib/x86_64-linux-gnu/libcuda.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=cuda-base /usr/local/cuda/ /usr/local/cuda/
+
+# Ensure CUDA libraries are on the path
+ENV PATH=/usr/local/nvidia/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH

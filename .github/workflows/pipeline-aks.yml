@@ -1,0 +1,95 @@
+name: Build and deploy an app to AKS with Helm
+
+on:
+  push:
+    branches:
+        - main
+        - dev
+        - staging
+    paths:
+      - 'LLM/override-aks-**'
+  workflow_dispatch:
+
+env:
+  DEPLOYMENT_NAME: 'toolace' 
+  RESOURCE_GROUP: "bot"
+  CLUSTER_NAME: "production-cluster"
+
+jobs:
+  Deploy:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    environment: 'test/branch'
+    steps:
+      # Checks out the repository this file is in
+      - uses: actions/checkout@v4
+
+      # Logs in with your Azure credentials
+      - name: Azure login
+        uses: azure/login@v1.4.6
+        with:
+          # client-id: "15a33ac2-c3d6-411d-965c-4de712b4f1b2"
+          # tenant-id: "fdc10b8f-c69c-4f87-aa99-64116634536d"
+          # subscription-id: "7ca77659-82ce-439d-b2cd-26a1dd5a8281"
+          client-id: "dc923ee8-31e8-4548-8e0f-400749558c8d"
+          tenant-id: "b4feeab6-0cc8-4688-a380-fed8e5285c94"
+          subscription-id: "52cc75d8-8111-41dd-8b3f-401c6c5e5c21"
+      # Use kubelogin to configure your kubeconfig for Azure auth
+      - name: Set up kubelogin for non-interactive login
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: 'v0.0.25'
+
+      # Retrieves your Azure Kubernetes Service cluster's kubeconfig file
+      - name: Get K8s context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          admin: 'false'
+          use-kubelogin: 'true'
+
+      # Install helm
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+
+      # Deploy the Docker image to the GKE cluster
+      - name: Deploy
+        run: |
+          BRANCH_NAME=$(echo "${GITHUB_REF#refs/heads/}")
+
+          case $BRANCH_NAME in
+            "main")
+              INGRESS_HOST="api-azure.llm.voicing.ai"
+              NAMESPACE="prod";;
+            "dev")
+              INGRESS_HOST="api-dev-azure.llm.voicing.ai"
+              NAMESPACE="dev";;
+            "test/branch")
+              INGRESS_HOST="api-dev-azure.llm.voicing.ai"
+              NAMESPACE="dev";;
+            "staging")
+              INGRESS_HOST="api-stage-azure.llm.voicing.ai"
+              NAMESPACE="staging";;
+            *)
+              echo "Skipping deployment for branch: $BRANCH_NAME"
+              exit 0;;
+          esac
+
+          echo "Deploying to namespace: $NAMESPACE with ingress host: $INGRESS_HOST"
+
+          if [ -n "$NAMESPACE" ]; then
+            echo $INGRESS_HOST 
+            echo $NAMESPACE
+
+            helm list -n "$NAMESPACE" | grep -q "$DEPLOYMENT_NAME" && helm uninstall "$DEPLOYMENT_NAME" -n "$NAMESPACE"
+
+
+            helm upgrade --install $DEPLOYMENT_NAME LLM/ -f LLM/override-aks-meta-llama-Llama-3.3-70B.yaml -n $NAMESPACE\
+            --wait  --timeout 20m
+          else
+            echo "Skipping Helm deployment and Kubernetes commands as NAMESPACE is empty."
+          fi

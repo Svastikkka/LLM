@@ -1,0 +1,131 @@
+name: On-demand CI/CD Pipeline
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform: scaleup or scaledown'
+        required: true
+        default: 'scaleup'
+        type: choice
+        options:
+          - scaleup
+          - scaledown
+      namespace:
+        description: 'Kubernetes Namespace'
+        required: true
+        default: 'dev'
+      deployments:
+        description: 'Select deployment group'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - toolace
+          - toolace-llama3-3
+          - toolace-mistral
+          - toolace-meltemi
+          - toolace-salesforce
+          - toolace-salesforce-xlam32b
+          - toolace-salesforce-llama-xlam-70b
+          - toolace-qwen-30b
+      override:
+        description: 'Select override.yaml'
+        required: true
+        default: 'override-gke-toolace-8B.yaml'
+        type: choice
+        options:
+          - override-gke-meta-llama-Llama-3.1-70B.yaml
+          - override-gke-meta-llama-Llama-3.3-70B.yaml
+          - override-gke-Mistral-7B-Instruct-v0.3.yaml
+          - override-gke-salesforce-llama-xlam-2-70b-fc-r.yaml
+          - override-gke-salesforce-xlam8b.yaml
+          - override-gke-salesforce-xlam32b.yaml
+          - override-gke-toolace-8B.yaml
+          - override-gke-ilsp-meltemi-7B-v1.yaml
+          - override-gke-wattsTools-8B.yaml
+          - override-aws-qwen-qwen3-30b-a3b.yaml
+          - override-gke-qwen-qwen3-30b-a3b2.yaml
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Set up environment variables (this can also be done through GitHub secrets)
+      - name: Set up Google Cloud authentication
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: "${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}"
+          service_account: "${{ secrets.SERVICE_ACCOUNT_EMAIL }}"
+          project_id: "${{ secrets.PROJECT_ID }}"
+          token_format: access_token
+
+      # Authenticate Docker to Google Cloud Artifact Registry
+      - name: Configure Docker to use GCR
+        run: |
+          gcloud auth configure-docker
+
+      # Get the GKE credentials so we can deploy to the cluster
+      - name: 'Set up GKE credentials'
+        uses: 'google-github-actions/get-gke-credentials@v2'
+        with:
+          cluster_name: "${{ secrets.GKE_CLUSTER }}"
+          location: "${{ secrets.GAR_LOCATION }}"
+
+      # Install helm
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+
+      # Deploy LLM service
+      - name: Deploy
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          NAMESPACE="${{ github.event.inputs.namespace }}"
+          DEPLOYMENT="${{ github.event.inputs.deployments }}"
+          OVERRIDE="${{ github.event.inputs.override }}"
+          BRANCH_NAME=$(echo "${GITHUB_REF#refs/heads/}")
+      
+          case $BRANCH_NAME in
+            "main")
+              INGRESS_HOST="api.llm.voicing.ai"
+              NAMESPACE="prod";;
+            "dev")
+              INGRESS_HOST="api-dev.llm.voicing.ai"
+              NAMESPACE="dev";;
+            "staging")
+              INGRESS_HOST="api-stage.llm.voicing.ai"
+              NAMESPACE="staging";;
+            *)
+              echo "Skipping deployment for branch: $BRANCH_NAME"
+              exit 0;;
+          esac
+      
+          echo "Action: $ACTION"
+          echo "Namespace: $NAMESPACE"
+          echo "Deployment: $DEPLOYMENT"
+      
+          if [ "$ACTION" = "scaledown" ]; then
+            echo "Scaling down deployment: $DEPLOYMENT"
+            if helm status "$DEPLOYMENT" -n "$NAMESPACE" &>/dev/null; then
+                helm uninstall "$DEPLOYMENT" -n "$NAMESPACE"
+            else
+                echo "Deployment $DEPLOYMENT not found in namespace $NAMESPACE."
+            fi
+            exit 0
+          fi
+      
+          # Default: scaleup or redeploy
+          echo "Deploying with override: $OVERRIDE"
+          helm upgrade --install $DEPLOYMENT LLM/ -f LLM/$OVERRIDE -n $NAMESPACE \
+            --wait --timeout 20m
+
+            

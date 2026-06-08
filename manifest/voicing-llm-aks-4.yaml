@@ -1,0 +1,181 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicing-llm
+  labels:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+automountServiceAccountToken: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicing-llm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicing-llm
+  labels:
+    app.kubernetes.io/name: voicing-llm
+    app.kubernetes.io/instance: voicing-llm
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voicing-llm
+      app.kubernetes.io/instance: voicing-llm
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voicing-llm
+        app.kubernetes.io/instance: voicing-llm
+
+    spec:
+      serviceAccountName: voicing-llm
+
+      tolerations:
+        - key: "sku"
+          operator: "Equal"
+          value: "gpu"
+          effect: "NoSchedule"
+
+      nodeSelector:
+        agentpool: h100pool
+
+      containers:
+        - name: voicing-llm
+
+          image: acrqwen07412.azurecr.io/sglang-wolfi:latest
+          imagePullPolicy: Always
+
+          command:
+            - "python3"
+            - "-m"
+            - "sglang.launch_server"
+
+          args:
+            - "--model"
+            - "voicing-ai/Voicing-Agent-V3-35B-A3B"
+
+            - "--served-model-name"
+            - "Voicing-Agent-V3-35B-A3B"
+
+            - "--host"
+            - "0.0.0.0"
+
+            - "--port"
+            - "8000"
+
+            - "--tp"
+            - "1"
+
+            - "--dtype"
+            - "bfloat16"
+
+            - "--mem-fraction-static"
+            - "0.90"
+
+            - "--attention-backend"
+            - "triton"
+
+            - "--sampling-backend"
+            - "pytorch"
+
+            - "--reasoning-parser"
+            - "qwen3"
+
+            - "--tool-call-parser"
+            - "qwen3_coder"
+
+            - "--context-length"
+            - "65536"
+
+            - "--chunked-prefill-size"
+            - "4096"
+
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HUGGING_FACE_HUB_TOKEN
+
+          stdin: true
+          tty: true
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          resources:
+            limits:
+              cpu: "16"
+              memory: 120Gi
+              nvidia.com/gpu: "1"
+
+            requests:
+              cpu: "16"
+              memory: 120Gi
+              nvidia.com/gpu: "1"
+
+          volumeMounts:
+            - mountPath: /root/.cache/huggingface
+              name: model-cache
+
+      volumes:
+        - name: model-cache
+          emptyDir: {}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+
+metadata:
+  name: voicing-llm
+
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/ingress.class: "external-nginx"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+
+spec:
+  ingressClassName: external-nginx
+
+  tls:
+    - hosts:
+        - llm-dev.aks.voicing.ai
+      secretName: voicing-llm-tls
+
+  rules:
+    - host: llm-dev.aks.voicing.ai
+
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+
+            backend:
+              service:
+                name: voicing-llm
+                port:
+                  number: 80

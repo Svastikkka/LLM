@@ -1,0 +1,67 @@
+name: Google Cloud Custom NIM Image Builder
+
+on:
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: 'nonprod1-svc-r4rc'
+  GAR_LOCATION: 'us-central1'
+  GKE_CLUSTER: 'pipeline-cluster-1'
+  GKE_LOCATION: 'us-central1'
+  DEPLOYMENT_NAME: 'nim' 
+  REPOSITORY: 'gcr.io'
+  IMAGE: 'nim'
+  WORKLOAD_IDENTITY_PROVIDER: 'projects/913084804953/locations/global/workloadIdentityPools/github/providers/github'
+  SERVICE_ACCOUNT_EMAIL: 'github-actions@nonprod1-svc-r4rc.iam.gserviceaccount.com'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  authenticate_and_deploy:
+    runs-on: selh-hosted-llm
+    
+    steps:
+      # Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Set up environment variables (this can also be done through GitHub secrets)
+      - name: Set up Google Cloud authentication
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: '${{ env.WORKLOAD_IDENTITY_PROVIDER }}'
+          service_account: '${{ env.SERVICE_ACCOUNT_EMAIL }}'
+          project_id: '${{ env.PROJECT_ID }}'
+          token_format: access_token
+
+      # Authenticate Docker to Google Cloud Artifact Registry
+      - name: Configure Docker to use GCR
+        run: |
+          gcloud auth configure-docker
+
+      # Get the GKE credentials so we can deploy to the cluster
+      - name: 'Set up GKE credentials'
+        uses: 'google-github-actions/get-gke-credentials@v2'
+        with:
+          cluster_name: '${{ env.GKE_CLUSTER }}'
+          location: '${{ env.GKE_LOCATION }}'
+
+      - name: Authenticate with NVIDIA NGC
+        run: |
+          echo "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" | docker login nvcr.io \
+            --username '$oauthtoken' --password-stdin
+
+
+      # Build the Docker image
+      - name: 'Build and push Docker container'
+        run: |-
+          DOCKER_TAG="${REPOSITORY}/${PROJECT_ID}/github.com/voicingai/${IMAGE}:${GITHUB_SHA}"
+          ls && docker build \
+            -f DockerfileNIM \
+            --tag "${DOCKER_TAG}" \
+            --build-arg GITHUB_SHA="${GITHUB_SHA}" \
+            --build-arg GITHUB_REF="${GITHUB_REF}" \
+            .
+          docker push "${DOCKER_TAG}"

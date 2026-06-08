@@ -1,0 +1,157 @@
+image:
+  repository: ghcr.io/ggerganov/llama.cpp
+  tag: "server"
+
+serviceAccount:
+  create: false
+  name: ""
+  automount: true
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5001
+
+containerPort: 5001
+
+resources:
+  limits:
+    cpu: "22"
+    memory: 80Gi
+    nvidia.com/gpu: "1"
+    # nvidia.com/mig-3g.47gb: "1"
+  requests:
+    cpu: "22"
+    memory: 80Gi
+    nvidia.com/gpu: "1"
+    # nvidia.com/mig-3g.47gb: "1"
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetMemoryUtilizationPercentage: 80
+
+volumes:
+  - name: model-cache
+    emptyDir: {}
+  - name: config-volume
+    secret:
+      secretName: jinja-config-qwen3
+  - name: xlam-tool-code
+    secret:
+      secretName: xlam-tool-parser-qwen3
+
+volumeMounts:
+  - name: config-volume
+    mountPath: /etc/config
+    readOnly: true
+  - name: xlam-tool-code
+    mountPath: /app/tools
+    readOnly: true
+  # - name: toolace-nfs
+  #   mountPath: /mnt/models
+
+ingress:
+  enabled: true
+  className: "external-nginx"
+  hosts:
+  - host: qwen3-dev-azure.llm.voicing.ai
+    paths:
+      - path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - qwen3-dev-azure.llm.voicing.ai
+    secretName: llm-qwen3-tls
+
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/ingress.class: 'external-nginx'
+    nginx.ingress.kubernetes.io/force-ssl-redirect: 'true'
+
+nodeSelector:
+  kubernetes.azure.com/agentpool: h100pool2
+
+tolerations:
+  - key: "sku"
+    operator: "Equal"
+    value: "gpu"
+    effect: "NoSchedule"
+
+pv:
+  enabled: false
+
+pvc:
+  enabled: false
+
+nfs: {}
+
+namespace: dev
+
+container:
+  secretName: qwen3-credentials
+  secretName2: jinja-config-qwen3
+  secretName3: xlam-tool-parser-qwen3
+
+  command: ["/bin/sh", "-c"]
+  args:
+    - >
+      exec llama-server
+      -hf unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M
+      --host 0.0.0.0
+      --port 5001
+      --ctx-size 8192
+      --n-predict 512
+      --temp 0.7
+      --top-p 0.9
+      --top-k 50
+      --hf-repo-dir /models/unsloth-Qwen3-30B-A3B-GGUF
+      --hf-allow-branches main
+
+  env:
+    regular:
+      - name: PYTHONPATH
+        value: /app/tools
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: "all"
+      - name: CUDA_VISIBLE_DEVICES
+        value: "0"
+      - name: GGML_CUDA_FORCE_MMQ
+        value: "1"
+      - name: GGML_CUDA_FORCE_CUBLAS
+        value: "1"
+      - name: VLLM_LOGGING_LEVEL
+        value: DEBUG
+      - name: NCCL_P2P_LEVEL
+        value: "NVL"
+      - name: VLLM_HOST_IP
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: RAY_NODE_IP_ADDRESS
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+    secret:
+      - name: HUGGING_FACE_HUB_TOKEN
+        value: "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"
+
+jinjaTemplatePath: "files/qwen3-Instruct.jinja"
+
+
+# pip install dateparser pandas
+
+# python3 benchmarks/benchmark_serving.py \
+#      --base-url https://qwen3-dev-azure.llm.voicing.ai \
+#      --endpoint /v1/chat/completions \
+#      --model  qwen/qwen3-4b-instruct-2507-fp8\
+#      --backend openai-chat \
+#      --dataset-name random \
+#      --random-input-len 128 \
+#      --random-output-len 128 \
+#      --num-prompts 1000 \
+#      --max-concurrency 50 \
+#      --percentile-metrics ttft,tpot,e2el  \
+#      --save-result
