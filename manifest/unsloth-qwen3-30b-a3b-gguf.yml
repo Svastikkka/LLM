@@ -155,29 +155,3 @@ spec:
       port: 8080
       targetPort: 8080
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: qwen30b-ingress
-  namespace: dev
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    kubernetes.io/ingress.class: "external-nginx"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-spec:
-  ingressClassName: external-nginx
-  tls:
-    - hosts:
-        - qwen3-dev-azure.llm.voicing.ai
-      secretName: llm-qwen3-tls
-  rules:
-    - host: qwen3-dev-azure.llm.voicing.ai
-      http:
-        paths:
-          - path: /
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: qwen30b-svc
-                port:
-                  number: 8080

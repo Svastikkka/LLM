@@ -144,25 +144,3 @@ spec:
       nodeSelector:
         cloud.google.com/gke-accelerator: nvidia-a100-80gb
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: voicing-llm
-  annotations:
-    kubernetes.io/ingress.class: "gce"
-    networking.gke.io/managed-certificates: llm-voicing-cert
-    kubernetes.io/ingress.global-static-ip-name: llm-voicing-ip
-    kubernetes.io/ingress.allow-http: "true"
-spec:
-  ingressClassName: gce
-  rules:
-    - host: llm-dev.nonprod.voicing.ai
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: voicing-llm
-                port:
-                  number: 80
